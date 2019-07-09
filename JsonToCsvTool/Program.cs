@@ -15,6 +15,7 @@ namespace JsonToCsvTool
     {
         readonly static string importPath = ConfigurationSettings.AppSettings["jsonFilePath"];
         readonly static string exportPath = ConfigurationSettings.AppSettings["csvFilePath"];
+        static int rowCount = int.Parse(ConfigurationSettings.AppSettings["rowCount"]);
 
         static void Main(string[] args)
         {
@@ -22,13 +23,48 @@ namespace JsonToCsvTool
 
             try
             {
-                foreach (string file in Directory.EnumerateFiles(importPath, "*.json"))
+                StringWriter csvString = new StringWriter();
+
+                try
                 {
-                    Console.WriteLine($"Processing {Path.GetFileName(file)}");
-                    string contents = File.ReadAllText(file);                    
-                    var csv = jsonToCSV(contents, ",");
-                    File.WriteAllText($"{exportPath}\\{Path.GetFileNameWithoutExtension(file)}.csv", csv, Encoding.UTF8);
-                    Console.WriteLine($"Export csv file {Path.GetFileName(file)}");
+                    using (var csv = new CsvWriter(csvString))
+                    {
+                        //csv.Configuration.SkipEmptyRecords = true;
+                        //csv.Configuration.WillThrowOnMissingField = false;                
+                        csv.Configuration.Delimiter = ",";
+
+                        foreach (var property in typeof(Model).GetProperties())
+                        {
+                            csv.WriteField(property.Name);
+                        }
+
+                        foreach (string file in Directory.EnumerateFiles(importPath, "*.json"))
+                        {
+                            if (rowCount > 0)
+                            {
+                                Console.WriteLine($"Processing {Path.GetFileName(file)}");
+                                string contents = File.ReadAllText(file);
+                                var model = JsonConvert.DeserializeObject<Model>(contents);
+                                csv.NextRecord();
+                                csv.WriteField(model.mainText?.Replace(Environment.NewLine, " ").Trim());
+                                csv.WriteField(model.opinion?.Replace(Environment.NewLine, " ").Trim());
+                                csv.WriteField(model.judgement?.Replace(Environment.NewLine, " ").Trim());
+                                rowCount--;
+                            }
+                            else
+                            {
+                                break;
+                            }
+                        }
+
+                        string dirName = new DirectoryInfo(importPath).Name;
+                        File.WriteAllText($"{exportPath}\\{dirName}.csv", csvString.ToString(), Encoding.UTF8);
+                        Console.WriteLine($"Export csv file done");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Covert to csv fail: {ex.ToString()}");
                 }
             }
             catch (Exception ex)
@@ -38,42 +74,6 @@ namespace JsonToCsvTool
             }
 
             Console.WriteLine($"Convert to csv file done.");
-        }
-
-        public static string jsonToCSV(string jsonContent, string delimiter)
-        {
-            StringWriter csvString = new StringWriter();
-
-            try
-            {
-                using (var csv = new CsvWriter(csvString))
-                {
-                    //csv.Configuration.SkipEmptyRecords = true;
-                    //csv.Configuration.WillThrowOnMissingField = false;                
-                    csv.Configuration.Delimiter = delimiter;
-                    var model = jsonStringList(jsonContent);
-
-                    foreach (var property in model.GetType().GetProperties())
-                    {
-                        csv.WriteField(property.Name);
-                    }
-                    csv.NextRecord();
-                    csv.WriteField(model.mainText?.Replace(Environment.NewLine, " "));
-                    csv.WriteField(model.opinion?.Replace(Environment.NewLine, " "));
-                    csv.WriteField(model.judgement?.Replace(Environment.NewLine, " "));
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Covert to csv fail: {ex.ToString()}");
-            }
-            return csvString.ToString();
-        }
-
-        public static Model jsonStringList(string jsonContent)
-        {
-            var result = JsonConvert.DeserializeObject<Model>(jsonContent);
-            return result;
         }
 
         public class Model
