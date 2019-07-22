@@ -10,6 +10,7 @@ using System.Data;
 using Newtonsoft.Json;
 using Ionic.Zip;
 using System.Net;
+using System.Threading;
 
 namespace JsonToCsvTool
 {
@@ -18,7 +19,7 @@ namespace JsonToCsvTool
         static readonly string ZipFilePath = ConfigurationManager.AppSettings["zipFilePath"];
         //readonly static string importPath = ConfigurationManager.AppSettings["jsonFilePath"];
         static readonly string ExportPath = ConfigurationManager.AppSettings["csvFilePath"];
-        //static int limitRowCount = int.Parse(ConfigurationManager.AppSettings["limitRowCount"]);
+        static int limitRowCount = int.Parse(ConfigurationManager.AppSettings["limitRowCount"]);
         static readonly string InsertUrl = ConfigurationManager.AppSettings["create"];
         static readonly string DeleteUrl = ConfigurationManager.AppSettings["delete"];
         static string _dirName = "";
@@ -46,7 +47,8 @@ namespace JsonToCsvTool
                     {
                         using (ZipFile zip = ZipFile.Read(file))
                         {
-                            int rowCount = 0;
+                            bool isExportCSV = false;
+                            int rowCount = 0, insertRowCount = 0;
 
                             foreach (ZipEntry zipEntry in zip)
                             {
@@ -63,21 +65,42 @@ namespace JsonToCsvTool
                                         var sr = new StreamReader(ms, Encoding.UTF8);
                                         var jsonString = sr.ReadToEnd();
                                         InsertMongoDb(jsonString);
-                                        var model = JsonConvert.DeserializeObject<Model>(jsonString);
+                                        insertRowCount++;
+                                        Console.WriteLine($"Already insert {insertRowCount} verdicts.");
 
-                                        if (model.date.HasValue && model.date.Value.Date >= DateTime.Now.AddYears(-1))
+                                        if (rowCount <= limitRowCount)
                                         {
-                                            csv.NextRecord();
-                                            csv.WriteField(model.date.Value.ToString("yyyy/MM/dd HH:mm:ss"));
-                                            csv.WriteField(model.sys);
-                                            csv.WriteField(model.reason?.Replace(Environment.NewLine, " ").Trim());
-                                            csv.WriteField(model.judgement?.Replace(Environment.NewLine, " ").Trim());
-                                            csv.WriteField(model.type?.Replace(Environment.NewLine, " ").Trim());
-                                            csv.WriteField(model.mainText?.Replace(Environment.NewLine, " ").Trim());
-                                            csv.WriteField(model.opinion?.Replace(Environment.NewLine, " ").Trim());
-                                            csv.WriteField(
-                                                model.relatedIssues?.Replace(Environment.NewLine, " ").Trim());
-                                            rowCount++;
+                                            var model = JsonConvert.DeserializeObject<Model>(jsonString);
+
+                                            if (model.date.HasValue && model.date.Value.Date >= DateTime.Now.AddYears(-1))
+                                            {
+                                                csv.NextRecord();
+                                                csv.WriteField(model.date.Value.ToString("yyyy/MM/dd"));
+                                                csv.WriteField(model.sys);
+                                                csv.WriteField(model.reason?.Replace(Environment.NewLine, " ").Trim());
+                                                csv.WriteField(model.judgement?.Replace(Environment.NewLine, " ").Trim());
+                                                csv.WriteField(model.type?.Replace(Environment.NewLine, " ").Trim());
+                                                csv.WriteField(model.mainText?.Replace(Environment.NewLine, " ").Trim());
+                                                csv.WriteField(model.opinion?.Replace(Environment.NewLine, " ").Trim());
+
+                                                StringBuilder _relatedIssues = new StringBuilder();
+                                                foreach (var ri in model.relatedIssues)
+                                                {
+                                                    if (!string.IsNullOrEmpty(ri.lawName)) _relatedIssues.Append(ri.lawName.Trim());
+                                                    if (!string.IsNullOrEmpty(ri.issueRef)) _relatedIssues.Append(ri.issueRef.Trim());
+                                                }
+
+                                                if (_relatedIssues.Length > 0)
+                                                    csv.WriteField(_relatedIssues.ToString());
+
+                                                rowCount++;
+                                            }
+                                        }
+                                        else if (isExportCSV == false)
+                                        {
+                                            isExportCSV = true;
+                                            Console.WriteLine($"{_dirName} export {rowCount} verdicts in csv.");
+                                            File.WriteAllText($"{ExportPath}\\{_dirName}.csv", csvString.ToString(), Encoding.UTF8);
                                         }
 
                                         sr.Dispose();
@@ -98,10 +121,7 @@ namespace JsonToCsvTool
                                     //    rowCount++;
                                     //}
                                 }
-                            }
-
-                            Console.WriteLine($"Total export {rowCount} data rows.");
-                            File.WriteAllText($"{ExportPath}\\{_dirName}.csv", csvString.ToString(), Encoding.UTF8);
+                            }                            
                         }
 
                         //File.Delete($"{importPath}\\{dirName}");
@@ -121,6 +141,8 @@ namespace JsonToCsvTool
 
         public static void InsertMongoDb(string jsonData)
         {
+            int tryTimes = 3;
+
             try
             {
                 if (!string.IsNullOrEmpty(jsonData))
@@ -138,14 +160,27 @@ namespace JsonToCsvTool
                         streamWriter.Write(jsonData);
                     }
 
-                    var httpResponse = (HttpWebResponse)httpWebRequest.GetResponse();
-
-                    if (httpResponse.GetResponseStream() != null)
+                    while (tryTimes > 0)
                     {
-                        using (var streamReader = new StreamReader(httpResponse.GetResponseStream()))
+                        try
                         {
-                            var result = streamReader.ReadToEnd();
-                            Console.WriteLine($"Insert succeed: {result}");
+                            var httpResponse = (HttpWebResponse)httpWebRequest.GetResponse();
+
+                            if (httpResponse.GetResponseStream() != null)
+                            {
+                                using (var streamReader = new StreamReader(httpResponse.GetResponseStream()))
+                                {
+                                    var result = streamReader.ReadToEnd();
+                                    //Console.WriteLine($"Insert succeed: {result}");
+                                }
+                            }
+                            tryTimes = 0;
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine(ex);
+                            tryTimes--;
+                            Thread.Sleep(1000);
                         }
                     }
                 }
@@ -154,18 +189,23 @@ namespace JsonToCsvTool
             {
                 Console.WriteLine(ex);
             }
-            
         }
+
         public class Model
         {
             public DateTime? date { get; set; }
             public string sys { get; set; }
             public string reason { get; set; }
             public string type { get; set; }
-            public string relatedIssues { get; set; }
             public string mainText { get; set; }
             public string opinion { get; set; }
             public string judgement { get; set; }
+            public class RelatedIssues
+            {
+                public string lawName { get; set; }
+                public string issueRef { get; set; }
+            }
+            public List<RelatedIssues> relatedIssues { get; set; }
         }
     }
 }
