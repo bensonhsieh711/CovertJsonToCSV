@@ -23,6 +23,7 @@ namespace JsonToCsvTool
         static readonly string InsertUrl = ConfigurationManager.AppSettings["create"];
         static readonly string DeleteUrl = ConfigurationManager.AppSettings["delete"];
         static string _dirName = "";
+        static int rowCount = 0, insertRowCount = 0;
 
         static void Main(string[] args)
         {
@@ -48,7 +49,7 @@ namespace JsonToCsvTool
                         using (ZipFile zip = ZipFile.Read(file))
                         {
                             bool isExportCSV = false;
-                            int rowCount = 0, insertRowCount = 0;
+                            rowCount = insertRowCount = 0;
 
                             foreach (ZipEntry zipEntry in zip)
                             {
@@ -65,8 +66,6 @@ namespace JsonToCsvTool
                                         var sr = new StreamReader(ms, Encoding.UTF8);
                                         var jsonString = sr.ReadToEnd();
                                         InsertMongoDb(jsonString);
-                                        insertRowCount++;
-                                        Console.WriteLine($"Already insert {insertRowCount} verdicts.");
 
                                         if (rowCount <= limitRowCount)
                                         {
@@ -141,7 +140,7 @@ namespace JsonToCsvTool
 
         public static void InsertMongoDb(string jsonData)
         {
-            int tryTimes = 3;
+            int tryTimes = 2;
 
             try
             {
@@ -150,13 +149,10 @@ namespace JsonToCsvTool
                     var httpWebRequest = (HttpWebRequest)WebRequest.Create(InsertUrl);
                     httpWebRequest.ContentType = "application/json";
                     //httpWebRequest.ContentType = "application/x-www-form-urlencoded";
-
                     httpWebRequest.Method = "POST";
 
                     using (var streamWriter = new StreamWriter(httpWebRequest.GetRequestStream()))
                     {
-                        //string jsonData = "{\"user\":\"test\"," +
-                        //              "\"password\":\"bla\"}";
                         streamWriter.Write(jsonData);
                     }
 
@@ -168,17 +164,22 @@ namespace JsonToCsvTool
 
                             if (httpResponse.GetResponseStream() != null)
                             {
-                                using (var streamReader = new StreamReader(httpResponse.GetResponseStream()))
-                                {
-                                    var result = streamReader.ReadToEnd();
-                                    //Console.WriteLine($"Insert succeed: {result}");
-                                }
+                                //using (var streamReader = new StreamReader(httpResponse.GetResponseStream()))
+                                //{
+                                //    var result = streamReader.ReadToEnd();
+                                //    //Console.WriteLine($"Insert succeed: {result}");
+                                //}
+                                tryTimes = 0;
+                                insertRowCount++;
+                                Console.WriteLine($"Already insert {insertRowCount} verdicts.");
                             }
-                            tryTimes = 0;
+                            Console.WriteLine($"Post {InsertUrl} fail! Remain {tryTimes} times to try.");
+                            tryTimes--;
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine(ex);
+                            Console.WriteLine(ex.Message);
+                            Console.WriteLine($"Insert fail! Remain {tryTimes} times to try.");
                             tryTimes--;
                             Thread.Sleep(1000);
                         }
