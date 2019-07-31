@@ -21,7 +21,9 @@ namespace JsonToCsvTool
         static readonly string ExportPath = ConfigurationManager.AppSettings["csvFilePath"];
         static int limitRowCount = int.Parse(ConfigurationManager.AppSettings["limitRowCount"]);
         static readonly string InsertUrl = ConfigurationManager.AppSettings["create"];
+        static readonly string MutiInsertUrl = ConfigurationManager.AppSettings["mutiCreate"];
         static readonly string DeleteUrl = ConfigurationManager.AppSettings["delete"];
+        static readonly int MultipleRowNumber = Convert.ToInt32(ConfigurationManager.AppSettings["MultipleRowNumber"]);
         static string _dirName = "";
         static int rowCount = 0, insertRowCount = 0;
 
@@ -39,7 +41,7 @@ namespace JsonToCsvTool
                     //csv.Configuration.WillThrowOnMissingField = false;                
                     csv.Configuration.Delimiter = ",";
 
-                    foreach (var property in typeof(Model).GetProperties())
+                    foreach (var property in typeof(VerdictModel).GetProperties())
                     {
                         csv.WriteField(property.Name);
                     }
@@ -48,6 +50,7 @@ namespace JsonToCsvTool
                     {
                         using (ZipFile zip = ZipFile.Read(file))
                         {
+                            var verdictList = new List<VerdictModel>();
                             bool isExportCSV = false;
                             rowCount = insertRowCount = 0;
 
@@ -65,12 +68,20 @@ namespace JsonToCsvTool
                                         ms.Position = 0;
                                         var sr = new StreamReader(ms, Encoding.UTF8);
                                         var jsonString = sr.ReadToEnd();
-                                        InsertMongoDb(jsonString);
+                                        var model = JsonConvert.DeserializeObject<VerdictModel>(jsonString);
+
+                                        if (verdictList.Count() == MultipleRowNumber)
+                                        {
+                                            InsertMongoDb(verdictList);
+                                            verdictList = new List<VerdictModel>();
+                                        }
+                                        else
+                                        {
+                                            verdictList.Add(model);
+                                        }
 
                                         if (rowCount <= limitRowCount)
                                         {
-                                            var model = JsonConvert.DeserializeObject<Model>(jsonString);
-
                                             if (model.date.HasValue && model.date.Value.Date >= DateTime.Now.AddYears(-1))
                                             {
                                                 csv.NextRecord();
@@ -148,7 +159,6 @@ namespace JsonToCsvTool
                 {
                     var httpWebRequest = (HttpWebRequest)WebRequest.Create(InsertUrl);
                     httpWebRequest.ContentType = "application/json";
-                    //httpWebRequest.ContentType = "application/x-www-form-urlencoded";
                     httpWebRequest.Method = "POST";
 
                     using (var streamWriter = new StreamWriter(httpWebRequest.GetRequestStream()))
@@ -192,7 +202,56 @@ namespace JsonToCsvTool
             }
         }
 
-        public class Model
+        public static void InsertMongoDb(List<VerdictModel> verdictList)
+        {
+            int tryTimes = 2;
+
+            try
+            {
+                if (verdictList.Count > 0)
+                {
+                    var httpWebRequest = (HttpWebRequest)WebRequest.Create(MutiInsertUrl);
+                    httpWebRequest.ContentType = "application/json";
+                    httpWebRequest.Method = "POST";
+
+                    using (var streamWriter = new StreamWriter(httpWebRequest.GetRequestStream()))
+                    {
+                        var jsonData = JsonConvert.SerializeObject(verdictList);
+                        streamWriter.Write(jsonData);
+                    }
+
+                    while (tryTimes > 0)
+                    {
+                        try
+                        {
+                            var httpResponse = (HttpWebResponse)httpWebRequest.GetResponse();
+
+                            if (httpResponse.GetResponseStream() != null)
+                            {
+                                tryTimes = 0;
+                                insertRowCount++;
+                                Console.WriteLine($"Already insert {insertRowCount} verdicts.");
+                            }
+                            Console.WriteLine($"Post {InsertUrl} fail! Remain {tryTimes} times to try.");
+                            tryTimes--;
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine(ex.Message);
+                            Console.WriteLine($"Insert fail! Remain {tryTimes} times to try.");
+                            tryTimes--;
+                            Thread.Sleep(1000);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex);
+            }
+        }
+
+        public class VerdictModel
         {
             public DateTime? date { get; set; }
             public string sys { get; set; }
