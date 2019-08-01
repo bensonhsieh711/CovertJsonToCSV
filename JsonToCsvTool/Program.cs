@@ -11,11 +11,15 @@ using Newtonsoft.Json;
 using Ionic.Zip;
 using System.Net;
 using System.Threading;
+using System.Net.Http;
+using log4net;
+using log4net.Config;
 
 namespace JsonToCsvTool
 {
     class Program
     {
+        private static readonly ILog logger = LogManager.GetLogger("JsonToCsvTool");        
         static readonly string ZipFilePath = ConfigurationManager.AppSettings["zipFilePath"];
         //readonly static string importPath = ConfigurationManager.AppSettings["jsonFilePath"];
         static readonly string ExportPath = ConfigurationManager.AppSettings["csvFilePath"];
@@ -29,7 +33,8 @@ namespace JsonToCsvTool
 
         static void Main(string[] args)
         {
-            Console.WriteLine($"Start to convert json file from {ZipFilePath}");
+            //Console.WriteLine($"Start to convert json file from {ZipFilePath}");
+            logger.Info($"Start to convert json file from {ZipFilePath}");
 
             try
             {
@@ -77,12 +82,15 @@ namespace JsonToCsvTool
                                         }
                                         else
                                         {
-                                            verdictList.Add(model);
+                                            if (model.date.HasValue && model.date.Value >= DateTime.Now.Date.AddYears(-1))
+                                            {
+                                                verdictList.Add(model);
+                                            }
                                         }
 
                                         if (rowCount <= limitRowCount)
                                         {
-                                            if (model.date.HasValue && model.date.Value.Date >= DateTime.Now.AddYears(-1))
+                                            if (model.date.HasValue && model.date.Value.Date >= DateTime.Now.Date.AddYears(-1))
                                             {
                                                 csv.NextRecord();
                                                 csv.WriteField(model.date.Value.ToString("yyyy/MM/dd"));
@@ -164,34 +172,35 @@ namespace JsonToCsvTool
                     using (var streamWriter = new StreamWriter(httpWebRequest.GetRequestStream()))
                     {
                         streamWriter.Write(jsonData);
-                    }
 
-                    while (tryTimes > 0)
-                    {
-                        try
+                        while (tryTimes > 0)
                         {
-                            var httpResponse = (HttpWebResponse)httpWebRequest.GetResponse();
-
-                            if (httpResponse.GetResponseStream() != null)
+                            try
                             {
-                                //using (var streamReader = new StreamReader(httpResponse.GetResponseStream()))
-                                //{
-                                //    var result = streamReader.ReadToEnd();
-                                //    //Console.WriteLine($"Insert succeed: {result}");
-                                //}
-                                tryTimes = 0;
-                                insertRowCount++;
-                                Console.WriteLine($"Already insert {insertRowCount} verdicts.");
+                                var httpResponse = (HttpWebResponse)httpWebRequest.GetResponse();
+
+                                if (httpResponse.GetResponseStream() != null)
+                                {
+                                    //using (var streamReader = new StreamReader(httpResponse.GetResponseStream()))
+                                    //{
+                                    //    var result = streamReader.ReadToEnd();
+                                    //    //Console.WriteLine($"Insert succeed: {result}");
+                                    //}
+                                    tryTimes = 0;
+                                    insertRowCount++;
+                                    Console.WriteLine($"Already insert {insertRowCount} verdicts.");
+                                }
+                                Console.WriteLine($"Post {InsertUrl} fail! Remain {tryTimes} times to try.");
+                                tryTimes--;
                             }
-                            Console.WriteLine($"Post {InsertUrl} fail! Remain {tryTimes} times to try.");
-                            tryTimes--;
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine(ex.Message);
-                            Console.WriteLine($"Insert fail! Remain {tryTimes} times to try.");
-                            tryTimes--;
-                            Thread.Sleep(1000);
+                            catch (Exception ex)
+                            {
+                                logger.Debug($"{ex.Message}, {jsonData}");
+                                Console.WriteLine(ex.Message);
+                                Console.WriteLine($"Insert fail! Remain {tryTimes} times to try.");
+                                tryTimes--;
+                                Thread.Sleep(1000);
+                            }
                         }
                     }
                 }
@@ -201,56 +210,136 @@ namespace JsonToCsvTool
                 Console.WriteLine(ex);
             }
         }
+
+        //public static void InsertMongoDb(List<VerdictModel> verdictList)
+        //{
+        //    int tryTimes = 2;
+
+        //    try
+        //    {
+        //        if (verdictList.Count > 0)
+        //        {
+        //            var httpWebRequest = (HttpWebRequest)WebRequest.Create(MutiInsertUrl);
+        //            httpWebRequest.ContentType = "application/json";
+        //            httpWebRequest.Method = "POST";
+
+        //            using (var streamWriter = new StreamWriter(httpWebRequest.GetRequestStream()))
+        //            {
+        //                var jsonData = JsonConvert.SerializeObject(verdictList);
+        //                streamWriter.Write(jsonData);
+
+        //                while (tryTimes > 0)
+        //                {
+        //                    try
+        //                    {
+        //                        var httpResponse = (HttpWebResponse)httpWebRequest.GetResponse();
+
+        //                        if (httpResponse.GetResponseStream() != null)
+        //                        {
+        //                            tryTimes = 0;
+        //                            insertRowCount++;
+        //                            Console.WriteLine($"Already insert {insertRowCount} verdicts.");
+        //                        }
+        //                        Console.WriteLine($"Post {InsertUrl} fail! Remain {tryTimes} times to try.");                                
+        //                    }
+        //                    catch (Exception ex)
+        //                    {
+        //                        Console.WriteLine(ex.Message);
+        //                        Console.WriteLine($"Insert fail! Remain {tryTimes} times to try.");
+        //                        Thread.Sleep(1000);
+        //                    }
+        //                    tryTimes--;
+        //                }
+        //            }
+        //        }
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        Console.WriteLine(ex);
+        //    }
+        //}
 
         public static void InsertMongoDb(List<VerdictModel> verdictList)
         {
-            int tryTimes = 2;
-
-            try
+            if (verdictList.Count > 0)
             {
-                if (verdictList.Count > 0)
+                try
                 {
-                    var httpWebRequest = (HttpWebRequest)WebRequest.Create(MutiInsertUrl);
-                    httpWebRequest.ContentType = "application/json";
-                    httpWebRequest.Method = "POST";
-
-                    using (var streamWriter = new StreamWriter(httpWebRequest.GetRequestStream()))
-                    {
-                        var jsonData = JsonConvert.SerializeObject(verdictList);
-                        streamWriter.Write(jsonData);
-                    }
+                    int tryTimes = 3;
 
                     while (tryTimes > 0)
                     {
+                        //建立 WebRequest 並指定目標的 uri
+                        WebRequest request = WebRequest.Create(MutiInsertUrl);
+                        //指定 request 使用的 http verb
+                        request.Method = "POST";
+                        //準備 post 用資料
+                        //PostData postData = new PostData() { userId = 1, title = "yowko", body = "yowko test body 中文" };
+                        var json = JsonConvert.SerializeObject(verdictList)?.Replace(" ","");
+                        //指定 request 的 content type
+                        request.ContentType = "application/json; charset=utf-8";
+                        //指定 request header
+                        request.Headers.Add("authorization", "token apikey");
+                        //將需 post 的資料內容轉為 stream 
+                        using (var streamWriter = new StreamWriter(request.GetRequestStream()))
+                        {
+                            //string json = new JavaScriptSerializer().Serialize(postData);
+                            streamWriter.Write(json);
+                            streamWriter.Flush();
+                        }
+                       
                         try
                         {
-                            var httpResponse = (HttpWebResponse)httpWebRequest.GetResponse();
-
-                            if (httpResponse.GetResponseStream() != null)
+                            //使用 GetResponse 方法將 request 送出，如果不是用 using 包覆，請記得手動 close WebResponse 物件，避免連線持續被佔用而無法送出新的 request
+                            using (var httpResponse = (HttpWebResponse)request.GetResponse())
                             {
-                                tryTimes = 0;
-                                insertRowCount++;
-                                Console.WriteLine($"Already insert {insertRowCount} verdicts.");
+                                if (httpResponse.StatusCode == HttpStatusCode.OK)
+                                {
+                                    insertRowCount += verdictList.Count();
+                                    Console.WriteLine($"Insert {insertRowCount} verdicts already.");
+                                    tryTimes = 0;
+                                }
+                                else
+                                {
+                                    tryTimes--;
+
+                                    if (tryTimes > 0)
+                                    {
+                                        Console.WriteLine($"Bad request：{httpResponse.StatusCode}, remain {tryTimes} times.");
+                                        Thread.Sleep(new TimeSpan(0, 0, 3));
+                                    }
+                                    else
+                                    {
+                                        logger.Error(json);
+                                        Console.WriteLine($"Request fail：{httpResponse.StatusCode}");
+                                    }
+                                }
                             }
-                            Console.WriteLine($"Post {InsertUrl} fail! Remain {tryTimes} times to try.");
-                            tryTimes--;
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine(ex.Message);
-                            Console.WriteLine($"Insert fail! Remain {tryTimes} times to try.");
                             tryTimes--;
-                            Thread.Sleep(1000);
-                        }
+                            
+                            if (tryTimes > 0)
+                            {
+                                Console.WriteLine($"Post fail：{ex.Message}, remain {tryTimes} times.");
+                                Thread.Sleep(new TimeSpan(0, 0, 5));
+                            }
+                            else
+                            {
+                                logger.Error($"{ex.Message}, {json}");
+                                Console.WriteLine($"Request fail：{ex.Message}");
+                            }
+                        }                        
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex);
+                catch (Exception ex)
+                {
+                    Console.WriteLine(ex.ToString());
+                }                
             }
         }
-
+        
         public class VerdictModel
         {
             public DateTime? date { get; set; }
