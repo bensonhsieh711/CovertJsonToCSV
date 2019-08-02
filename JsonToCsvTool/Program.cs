@@ -29,7 +29,6 @@ namespace JsonToCsvTool
         static readonly string DeleteUrl = ConfigurationManager.AppSettings["delete"];
         static readonly int MultipleRowNumber = Convert.ToInt32(ConfigurationManager.AppSettings["MultipleRowNumber"]);
         static string _dirName = "";
-        static int rowCount = 0, insertRowCount = 0;
 
         static void Main(string[] args)
         {
@@ -57,7 +56,7 @@ namespace JsonToCsvTool
                         {
                             var verdictList = new List<VerdictModel>();
                             bool isExportCSV = false;
-                            rowCount = insertRowCount = 0;
+                            int rowCount = 0, insertedRowCount = 0;
 
                             foreach (ZipEntry zipEntry in zip)
                             {
@@ -77,7 +76,23 @@ namespace JsonToCsvTool
 
                                         if (verdictList.Count() == MultipleRowNumber)
                                         {
-                                            InsertMongoDb(verdictList);
+                                            var resultCount = InsertMongoDb(verdictList);
+
+                                            if (resultCount > 0)
+                                            {
+                                                insertedRowCount += resultCount;
+                                                Console.WriteLine($"Insert {insertedRowCount} verdict(s) already.");
+                                            }
+                                            else
+                                            {
+                                                Thread.Sleep(new TimeSpan(0, 0, 3));
+
+                                                foreach (var verdict in verdictList)
+                                                {
+                                                    insertedRowCount += InsertMongoDb(verdict);
+                                                    Console.WriteLine($"Insert {insertedRowCount} verdict(s) already.");
+                                                }
+                                            }                                            
                                             verdictList = new List<VerdictModel>();
                                         }
                                         else
@@ -157,75 +172,21 @@ namespace JsonToCsvTool
             Console.WriteLine($"Convert to csv file done.");
         }
 
-        public static void InsertMongoDb(string jsonData)
-        {
-            int tryTimes = 2;
-
-            try
-            {
-                if (!string.IsNullOrEmpty(jsonData))
-                {
-                    var httpWebRequest = (HttpWebRequest)WebRequest.Create(InsertUrl);
-                    httpWebRequest.ContentType = "application/json";
-                    httpWebRequest.Method = "POST";
-
-                    using (var streamWriter = new StreamWriter(httpWebRequest.GetRequestStream()))
-                    {
-                        streamWriter.Write(jsonData);
-
-                        while (tryTimes > 0)
-                        {
-                            try
-                            {
-                                var httpResponse = (HttpWebResponse)httpWebRequest.GetResponse();
-
-                                if (httpResponse.GetResponseStream() != null)
-                                {
-                                    //using (var streamReader = new StreamReader(httpResponse.GetResponseStream()))
-                                    //{
-                                    //    var result = streamReader.ReadToEnd();
-                                    //    //Console.WriteLine($"Insert succeed: {result}");
-                                    //}
-                                    tryTimes = 0;
-                                    insertRowCount++;
-                                    Console.WriteLine($"Already insert {insertRowCount} verdicts.");
-                                }
-                                Console.WriteLine($"Post {InsertUrl} fail! Remain {tryTimes} times to try.");
-                                tryTimes--;
-                            }
-                            catch (Exception ex)
-                            {
-                                logger.Debug($"{ex.Message}, {jsonData}");
-                                Console.WriteLine(ex.Message);
-                                Console.WriteLine($"Insert fail! Remain {tryTimes} times to try.");
-                                tryTimes--;
-                                Thread.Sleep(1000);
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex);
-            }
-        }
-
-        //public static void InsertMongoDb(List<VerdictModel> verdictList)
+        #region old code
+        //public static void InsertMongoDb(string jsonData)
         //{
         //    int tryTimes = 2;
 
         //    try
         //    {
-        //        if (verdictList.Count > 0)
+        //        if (!string.IsNullOrEmpty(jsonData))
         //        {
-        //            var httpWebRequest = (HttpWebRequest)WebRequest.Create(MutiInsertUrl);
+        //            var httpWebRequest = (HttpWebRequest)WebRequest.Create(InsertUrl);
         //            httpWebRequest.ContentType = "application/json";
         //            httpWebRequest.Method = "POST";
 
         //            using (var streamWriter = new StreamWriter(httpWebRequest.GetRequestStream()))
         //            {
-        //                var jsonData = JsonConvert.SerializeObject(verdictList);
         //                streamWriter.Write(jsonData);
 
         //                while (tryTimes > 0)
@@ -236,19 +197,24 @@ namespace JsonToCsvTool
 
         //                        if (httpResponse.GetResponseStream() != null)
         //                        {
+        //                            //using (var streamReader = new StreamReader(httpResponse.GetResponseStream()))
+        //                            //{
+        //                            //    var result = streamReader.ReadToEnd();
+        //                            //    //Console.WriteLine($"Insert succeed: {result}");
+        //                            //}
         //                            tryTimes = 0;
-        //                            insertRowCount++;
-        //                            Console.WriteLine($"Already insert {insertRowCount} verdicts.");
         //                        }
-        //                        Console.WriteLine($"Post {InsertUrl} fail! Remain {tryTimes} times to try.");                                
+        //                        Console.WriteLine($"Post {InsertUrl} fail! Remain {tryTimes} times to try.");
+        //                        tryTimes--;
         //                    }
         //                    catch (Exception ex)
         //                    {
+        //                        logger.Debug($"{ex.Message}, {jsonData}");
         //                        Console.WriteLine(ex.Message);
         //                        Console.WriteLine($"Insert fail! Remain {tryTimes} times to try.");
+        //                        tryTimes--;
         //                        Thread.Sleep(1000);
         //                    }
-        //                    tryTimes--;
         //                }
         //            }
         //        }
@@ -257,89 +223,110 @@ namespace JsonToCsvTool
         //    {
         //        Console.WriteLine(ex);
         //    }
-        //}
+        //}        
+        #endregion
 
-        public static void InsertMongoDb(List<VerdictModel> verdictList)
+        public static int InsertMongoDb(List<VerdictModel> verdictList)
         {
+            int rowCount = 0;
+
             if (verdictList.Count > 0)
             {
                 try
                 {
-                    int tryTimes = 3;
-
-                    while (tryTimes > 0)
+                    //建立 WebRequest 並指定目標的 uri
+                    WebRequest request = WebRequest.Create(MutiInsertUrl);
+                    //指定 request 使用的 http verb
+                    request.Method = "POST";
+                    //準備 post 用資料
+                    var json = JsonConvert.SerializeObject(verdictList)?.Replace(" ", "");
+                    //指定 request 的 content type
+                    request.ContentType = "application/json; charset=utf-8";
+                    //指定 request header
+                    request.Headers.Add("authorization", "token apikey");
+                    //將需 post 的資料內容轉為 stream 
+                    using (var streamWriter = new StreamWriter(request.GetRequestStream()))
                     {
-                        //建立 WebRequest 並指定目標的 uri
-                        WebRequest request = WebRequest.Create(MutiInsertUrl);
-                        //指定 request 使用的 http verb
-                        request.Method = "POST";
-                        //準備 post 用資料
-                        //PostData postData = new PostData() { userId = 1, title = "yowko", body = "yowko test body 中文" };
-                        var json = JsonConvert.SerializeObject(verdictList)?.Replace(" ","");
-                        //指定 request 的 content type
-                        request.ContentType = "application/json; charset=utf-8";
-                        //指定 request header
-                        request.Headers.Add("authorization", "token apikey");
-                        //將需 post 的資料內容轉為 stream 
-                        using (var streamWriter = new StreamWriter(request.GetRequestStream()))
-                        {
-                            //string json = new JavaScriptSerializer().Serialize(postData);
-                            streamWriter.Write(json);
-                            streamWriter.Flush();
-                        }
-                       
+                        //string json = new JavaScriptSerializer().Serialize(postData);
+                        streamWriter.Write(json);
+                        streamWriter.Flush();
+                    }
+
+                    //使用 GetResponse 方法將 request 送出，如果不是用 using 包覆，請記得手動 close WebResponse 物件，避免連線持續被佔用而無法送出新的 request
+                    using (var httpResponse = (HttpWebResponse)request.GetResponse())
+                    {
                         try
                         {
-                            //使用 GetResponse 方法將 request 送出，如果不是用 using 包覆，請記得手動 close WebResponse 物件，避免連線持續被佔用而無法送出新的 request
-                            using (var httpResponse = (HttpWebResponse)request.GetResponse())
+                            if (httpResponse.StatusCode == HttpStatusCode.OK)
                             {
-                                if (httpResponse.StatusCode == HttpStatusCode.OK)
-                                {
-                                    insertRowCount += verdictList.Count();
-                                    Console.WriteLine($"Insert {insertRowCount} verdicts already.");
-                                    tryTimes = 0;
-                                }
-                                else
-                                {
-                                    tryTimes--;
-
-                                    if (tryTimes > 0)
-                                    {
-                                        Console.WriteLine($"Bad request：{httpResponse.StatusCode}, remain {tryTimes} times.");
-                                        Thread.Sleep(new TimeSpan(0, 0, 3));
-                                    }
-                                    else
-                                    {
-                                        logger.Error(json);
-                                        Console.WriteLine($"Request fail：{httpResponse.StatusCode}");
-                                    }
-                                }
+                                rowCount += verdictList.Count();
                             }
                         }
                         catch (Exception ex)
                         {
-                            tryTimes--;
-                            
-                            if (tryTimes > 0)
-                            {
-                                Console.WriteLine($"Post fail：{ex.Message}, remain {tryTimes} times.");
-                                Thread.Sleep(new TimeSpan(0, 0, 5));
-                            }
-                            else
-                            {
-                                logger.Error($"{ex.Message}, {json}");
-                                Console.WriteLine($"Request fail：{ex.Message}");
-                            }
-                        }                        
+                            Console.WriteLine(ex);
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine(ex.ToString());
+                    Console.WriteLine(ex);
                 }                
             }
+            return rowCount;
         }
-        
+
+        public static int InsertMongoDb(VerdictModel verdict)
+        {
+            int rowCount = 0;
+
+            try
+            {
+                //建立 WebRequest 並指定目標的 uri
+                WebRequest request = WebRequest.Create(InsertUrl);
+                //指定 request 使用的 http verb
+                request.Method = "POST";
+                //準備 post 用資料
+                var json = JsonConvert.SerializeObject(verdict)?.Replace(" ", "");
+                //指定 request 的 content type
+                request.ContentType = "application/json; charset=utf-8";
+                //指定 request header
+                request.Headers.Add("authorization", "token apikey");
+                //將需 post 的資料內容轉為 stream 
+                using (var streamWriter = new StreamWriter(request.GetRequestStream()))
+                {
+                    //string json = new JavaScriptSerializer().Serialize(postData);
+                    streamWriter.Write(json);
+                    streamWriter.Flush();
+                }
+
+                //使用 GetResponse 方法將 request 送出，如果不是用 using 包覆，請記得手動 close WebResponse 物件，避免連線持續被佔用而無法送出新的 request
+                using (var httpResponse = (HttpWebResponse)request.GetResponse())
+                {
+                    try
+                    {
+                        if (httpResponse.StatusCode == HttpStatusCode.OK)
+                        {
+                            rowCount++;
+                        }
+                        else
+                        {
+                            logger.Debug($"Insert fail: {json}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Warn($"{ex.Message}: {json}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+            }
+            return rowCount;
+        }
+
         public class VerdictModel
         {
             public DateTime? date { get; set; }
