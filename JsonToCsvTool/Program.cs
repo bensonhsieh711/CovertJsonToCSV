@@ -23,11 +23,12 @@ namespace JsonToCsvTool
         static readonly string ZipFilePath = ConfigurationManager.AppSettings["zipFilePath"];
         //readonly static string importPath = ConfigurationManager.AppSettings["jsonFilePath"];
         static readonly string ExportPath = ConfigurationManager.AppSettings["csvFilePath"];
-        static int limitRowCount = int.Parse(ConfigurationManager.AppSettings["limitRowCount"]);
+        //static int LimitRowCount = int.Parse(ConfigurationManager.AppSettings["limitRowCount"]);
         static readonly string InsertUrl = ConfigurationManager.AppSettings["create"];
         static readonly string MutiInsertUrl = ConfigurationManager.AppSettings["mutiCreate"];
         static readonly string DeleteUrl = ConfigurationManager.AppSettings["delete"];
         static readonly int MultipleRowNumber = Convert.ToInt32(ConfigurationManager.AppSettings["MultipleRowNumber"]);
+        static readonly int MaxVerdictCount = Convert.ToInt32(ConfigurationManager.AppSettings["maxVerdictCount"]);
         static string _dirName = "";
 
         static void Main(string[] args)
@@ -44,19 +45,22 @@ namespace JsonToCsvTool
                     //csv.Configuration.SkipEmptyRecords = true;
                     //csv.Configuration.WillThrowOnMissingField = false;                
                     csv.Configuration.Delimiter = ",";
+                    csv.WriteField("date");
+                    csv.WriteField("sys");
+                    csv.WriteField("reason");
+                    csv.WriteField("judgement");
+                    csv.WriteField("type");
+                    csv.WriteField("mainText");
+                    csv.WriteField("opinion");
 
-                    foreach (var property in typeof(VerdictModel).GetProperties())
-                    {
-                        csv.WriteField(property.Name);
-                    }
 
                     foreach (string file in Directory.EnumerateFiles(ZipFilePath, "*.zip"))
                     {
                         using (ZipFile zip = ZipFile.Read(file))
                         {
                             var verdictList = new List<VerdictModel>();
-                            bool isExportCSV = false;
-                            int rowCount = 0, insertedRowCount = 0;
+                            //bool isExportCSV = false;
+                            int insertedRowCount = 0, batchCsvNumber = 1;
 
                             foreach (ZipEntry zipEntry in zip)
                             {
@@ -66,93 +70,88 @@ namespace JsonToCsvTool
                                 }
                                 else if (zipEntry.IsText)
                                 {
-                                    using (var ms = new MemoryStream())
+                                    if (insertedRowCount < MaxVerdictCount)
                                     {
-                                        zipEntry.Extract(ms);
-                                        ms.Position = 0;
-                                        var sr = new StreamReader(ms, Encoding.UTF8);
-                                        var jsonString = sr.ReadToEnd();
-                                        var model = JsonConvert.DeserializeObject<VerdictModel>(jsonString);
-
-                                        if (verdictList.Count() == MultipleRowNumber)
+                                        using (var ms = new MemoryStream())
                                         {
-                                            var resultCount = InsertMongoDb(verdictList);
+                                            zipEntry.Extract(ms);
+                                            ms.Position = 0;
+                                            var sr = new StreamReader(ms, Encoding.UTF8);
+                                            var jsonString = sr.ReadToEnd();
+                                            var model = JsonConvert.DeserializeObject<VerdictModel>(jsonString);
 
-                                            if (resultCount > 0)
+                                            if (verdictList.Count() == MultipleRowNumber)
                                             {
-                                                insertedRowCount += resultCount;
-                                                Console.WriteLine($"Insert {insertedRowCount} verdict(s) already.");
+                                                var resultCount = InsertMongoDb(verdictList);
+
+                                                if (resultCount > 0)
+                                                {
+                                                    insertedRowCount += resultCount;
+                                                    Console.WriteLine($"Insert {insertedRowCount} verdict(s) already.");
+                                                }
+                                                else
+                                                {
+                                                    Thread.Sleep(new TimeSpan(0, 0, 3));
+
+                                                    foreach (var verdict in verdictList)
+                                                    {
+                                                        insertedRowCount += InsertMongoDb(verdict);
+                                                        Console.WriteLine($"Insert {insertedRowCount} verdict(s) already.");
+                                                    }
+                                                }
+                                                verdictList = new List<VerdictModel>();
                                             }
                                             else
                                             {
-                                                Thread.Sleep(new TimeSpan(0, 0, 3));
-
-                                                foreach (var verdict in verdictList)
+                                                if (model.date.HasValue && model.date.Value >= DateTime.Now.Date.AddYears(-1))
                                                 {
-                                                    insertedRowCount += InsertMongoDb(verdict);
-                                                    Console.WriteLine($"Insert {insertedRowCount} verdict(s) already.");
+                                                    verdictList.Add(model);
                                                 }
-                                            }                                            
-                                            verdictList = new List<VerdictModel>();
-                                        }
-                                        else
-                                        {
-                                            if (model.date.HasValue && model.date.Value >= DateTime.Now.Date.AddYears(-1))
-                                            {
-                                                verdictList.Add(model);
                                             }
-                                        }
 
-                                        if (rowCount <= limitRowCount)
-                                        {
-                                            if (model.date.HasValue && model.date.Value.Date >= DateTime.Now.Date.AddYears(-1))
+                                            
+                                            if (insertedRowCount / 10000 != batchCsvNumber && zipEntry != zip.Last())
                                             {
-                                                csv.NextRecord();
-                                                csv.WriteField(model.date.Value.ToString("yyyy/MM/dd"));
-                                                csv.WriteField(model.sys);
-                                                csv.WriteField(model.reason?.Replace(Environment.NewLine, " ").Trim());
-                                                csv.WriteField(model.judgement?.Replace(Environment.NewLine, " ").Trim());
-                                                csv.WriteField(model.type?.Replace(Environment.NewLine, " ").Trim());
-                                                csv.WriteField(model.mainText?.Replace(Environment.NewLine, " ").Trim());
-                                                csv.WriteField(model.opinion?.Replace(Environment.NewLine, " ").Trim());
-
-                                                StringBuilder _relatedIssues = new StringBuilder();
-                                                foreach (var ri in model.relatedIssues)
+                                                if (model.date.HasValue && model.date.Value.Date >= DateTime.Now.Date.AddYears(-1))
                                                 {
-                                                    if (!string.IsNullOrEmpty(ri.lawName)) _relatedIssues.Append(ri.lawName.Trim());
-                                                    if (!string.IsNullOrEmpty(ri.issueRef)) _relatedIssues.Append(ri.issueRef.Trim());
+                                                    csv.NextRecord();
+                                                    csv.WriteField(model.date.Value.ToString("yyyy/MM/dd"));
+                                                    csv.WriteField(model.sys);
+                                                    csv.WriteField(model.reason?.Replace(Environment.NewLine, " ").Trim());
+                                                    csv.WriteField(model.judgement?.Replace(Environment.NewLine, " ").Trim());
+                                                    csv.WriteField(model.type?.Replace(Environment.NewLine, " ").Trim());
+                                                    csv.WriteField(model.mainText?.Replace(Environment.NewLine, " ").Trim());
+                                                    csv.WriteField(model.opinion?.Replace(Environment.NewLine, " ").Trim());
+
+                                                    StringBuilder _relatedIssues = new StringBuilder();
+                                                    foreach (var ri in model.relatedIssues)
+                                                    {
+                                                        if (!string.IsNullOrEmpty(ri.lawName)) _relatedIssues.Append(ri.lawName.Trim());
+                                                        if (!string.IsNullOrEmpty(ri.issueRef)) _relatedIssues.Append(ri.issueRef.Trim());
+                                                    }
+
+                                                    if (_relatedIssues.Length > 0)
+                                                        csv.WriteField(_relatedIssues.ToString());
                                                 }
-
-                                                if (_relatedIssues.Length > 0)
-                                                    csv.WriteField(_relatedIssues.ToString());
-
-                                                rowCount++;
                                             }
+                                            else
+                                            {
+                                                //Console.WriteLine($"{_dirName} export {rowCount} verdicts in csv.");                                                
+                                                File.WriteAllText($"{ExportPath}\\{_dirName}-{insertedRowCount / 10000}.csv", csvString.ToString(), Encoding.UTF8);
+                                                Console.WriteLine($"Export 10000 verdicts in csv already.");
+                                                batchCsvNumber++;
+                                            }
+                                            //else if (isExportCSV == false)
+                                            //{
+                                            //    isExportCSV = true;
+                                            //    Console.WriteLine($"{_dirName} export {rowCount} verdicts in csv.");
+                                            //    File.WriteAllText($"{ExportPath}\\{_dirName}-{insertedRowCount / 10000}.csv", csvString.ToString(), Encoding.UTF8);
+                                            //}                                            
+
+                                            sr.Dispose();
+                                            ms.Dispose();
                                         }
-                                        else if (isExportCSV == false)
-                                        {
-                                            isExportCSV = true;
-                                            Console.WriteLine($"{_dirName} export {rowCount} verdicts in csv.");
-                                            File.WriteAllText($"{ExportPath}\\{_dirName}.csv", csvString.ToString(), Encoding.UTF8);
-                                        }
-
-                                        sr.Dispose();
-                                        ms.Dispose();
-                                    }
-
-                                    //zipEntry.Extract(importPath, ExtractExistingFileAction.OverwriteSilently);                                        
-                                    //Console.WriteLine($"Extract {zipEntry.FileName} done.");                                        
-                                    //string contents = File.ReadAllText($"{importPath}\\{zipEntry.FileName}");
-                                    //var model = JsonConvert.DeserializeObject<Model>(contents);
-
-                                    //if (model.date.HasValue && model.date.Value.Date >= DateTime.Now.AddYears(-1))
-                                    //{
-                                    //    csv.NextRecord();
-                                    //    csv.WriteField(model.mainText?.Replace(Environment.NewLine, " ").Trim());
-                                    //    csv.WriteField(model.opinion?.Replace(Environment.NewLine, " ").Trim());
-                                    //    csv.WriteField(model.judgement?.Replace(Environment.NewLine, " ").Trim());
-                                    //    rowCount++;
-                                    //}
+                                    }                                    
                                 }
                             }                            
                         }
@@ -165,11 +164,11 @@ namespace JsonToCsvTool
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.ToString());
-                Console.ReadLine();
+                logger.Error(ex);
             }
 
-            Console.WriteLine($"Convert to csv file done.");
+            //Console.WriteLine($"Convert to csv file done.");
+            logger.Info("Convert to csv file done.");
         }
 
         #region old code
@@ -329,19 +328,29 @@ namespace JsonToCsvTool
 
         public class VerdictModel
         {
+            public string court { get; set; }
             public DateTime? date { get; set; }
+            public string no { get; set; }
             public string sys { get; set; }
             public string reason { get; set; }
+            public string judgement { get; set; }
             public string type { get; set; }
             public string mainText { get; set; }
             public string opinion { get; set; }
-            public string judgement { get; set; }
+
             public class RelatedIssues
             {
                 public string lawName { get; set; }
                 public string issueRef { get; set; }
             }
             public List<RelatedIssues> relatedIssues { get; set; }
+
+            //public class Party
+            //{
+            //    public string title { get; set; }
+            //    public string value { get; set; }
+            //}
+            //public List<Party> party { get; set; }
         }
     }
 }
